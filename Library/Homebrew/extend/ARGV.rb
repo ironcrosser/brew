@@ -16,11 +16,13 @@ module HomebrewArgvExtension
       --build-bottle
       --force-bottle
       --verbose
+      --force
       -i
       -v
       -d
       -g
       -s
+      -f
     ].freeze
   end
 
@@ -44,7 +46,7 @@ module HomebrewArgvExtension
       else
         Formulary.find_with_priority(name, spec)
       end
-    end
+    end.uniq(&:name)
   end
 
   def resolved_formulae
@@ -79,7 +81,7 @@ module HomebrewArgvExtension
       f.follow_installed_alias = false
 
       f
-    end
+    end.uniq(&:name)
   end
 
   def casks
@@ -131,9 +133,8 @@ module HomebrewArgvExtension
     end
   end
 
-  # self documenting perhaps?
   def include?(arg)
-    @n=index arg
+    !(@n = index(arg)).nil?
   end
 
   def next

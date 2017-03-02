@@ -9,8 +9,11 @@ require "utils/git"
 require "utils/github"
 require "utils/hash"
 require "utils/inreplace"
+require "utils/link"
 require "utils/popen"
+require "utils/svn"
 require "utils/tty"
+require "time"
 
 def ohai(title, *sput)
   title = Tty.truncate(title) if $stdout.tty? && !ARGV.verbose?
@@ -44,24 +47,32 @@ def odie(error)
   exit 1
 end
 
-def odeprecated(method, replacement = nil, options = {})
-  verb = if options[:die]
-    "disabled"
-  else
-    "deprecated"
-  end
-
+def odeprecated(method, replacement = nil, disable: false, disable_on: nil, caller: send(:caller))
   replacement_message = if replacement
     "Use #{replacement} instead."
   else
     "There is no replacement."
   end
 
+  unless disable_on.nil?
+    if disable_on > Time.now
+      will_be_disabled_message = " and will be disabled on #{disable_on.strftime("%Y-%m-%d")}"
+    else
+      disable = true
+    end
+  end
+
+  verb = if disable
+    "disabled"
+  else
+    "deprecated#{will_be_disabled_message}"
+  end
+
   # Try to show the most relevant location in message, i.e. (if applicable):
   # - Location in a formula.
   # - Location outside of 'compat/'.
   # - Location of caller of deprecated method (if all else fails).
-  backtrace = options.fetch(:caller, caller)
+  backtrace = caller
   tap_message = nil
   caller_message = backtrace.detect do |line|
     next unless line =~ %r{^#{Regexp.escape HOMEBREW_LIBRARY}/Taps/([^/]+/[^/]+)/}
@@ -80,7 +91,7 @@ def odeprecated(method, replacement = nil, options = {})
     #{caller_message}#{tap_message}
   EOS
 
-  if ARGV.homebrew_developer? || options[:die] ||
+  if ARGV.homebrew_developer? || disable ||
      Homebrew.raise_deprecation_exceptions?
     raise MethodDeprecatedError, message
   else
@@ -89,7 +100,7 @@ def odeprecated(method, replacement = nil, options = {})
 end
 
 def odisabled(method, replacement = nil, options = {})
-  options = { die: true, caller: caller }.merge(options)
+  options = { disable: true, caller: caller }.merge(options)
   odeprecated(method, replacement, options)
 end
 
@@ -97,7 +108,7 @@ def pretty_installed(f)
   if !$stdout.tty?
     f.to_s
   elsif Emoji.enabled?
-    "#{Tty.bold}#{f} #{Formatter.success(Emoji.tick)}#{Tty.reset}"
+    "#{Tty.bold}#{f} #{Formatter.success("✔")}#{Tty.reset}"
   else
     Formatter.success("#{Tty.bold}#{f} (installed)#{Tty.reset}")
   end
@@ -107,7 +118,7 @@ def pretty_uninstalled(f)
   if !$stdout.tty?
     f.to_s
   elsif Emoji.enabled?
-    "#{Tty.bold}#{f} #{Formatter.error(Emoji.cross)}#{Tty.reset}"
+    "#{Tty.bold}#{f} #{Formatter.error("✘")}#{Tty.reset}"
   else
     Formatter.error("#{Tty.bold}#{f} (uninstalled)#{Tty.reset}")
   end
@@ -412,13 +423,13 @@ end
 def disk_usage_readable(size_in_bytes)
   if size_in_bytes >= 1_073_741_824
     size = size_in_bytes.to_f / 1_073_741_824
-    unit = "G"
+    unit = "GB"
   elsif size_in_bytes >= 1_048_576
     size = size_in_bytes.to_f / 1_048_576
-    unit = "M"
+    unit = "MB"
   elsif size_in_bytes >= 1_024
     size = size_in_bytes.to_f / 1_024
-    unit = "K"
+    unit = "KB"
   else
     size = size_in_bytes
     unit = "B"
@@ -470,38 +481,6 @@ def truncate_text_to_approximate_size(s, max_bytes, options = {})
   out.encode!("UTF-16", invalid: :replace)
   out.encode!("UTF-8")
   out
-end
-
-def link_src_dst_dirs(src_dir, dst_dir, command, link_dir: false)
-  return unless src_dir.exist?
-  conflicts = []
-  src_paths = link_dir ? [src_dir] : src_dir.find
-  src_paths.each do |src|
-    next if src.directory? && !link_dir
-    dst = dst_dir/src.relative_path_from(src_dir)
-    if dst.symlink?
-      next if src == dst.resolved_path
-      dst.unlink
-    end
-    if dst.exist?
-      conflicts << dst
-      next
-    end
-    dst_dir.parent.mkpath
-    dst.make_relative_symlink(src)
-  end
-
-  return if conflicts.empty?
-  onoe <<-EOS.undent
-    Could not link:
-    #{conflicts.join("\n")}
-
-    Please delete these paths and run `#{command}`.
-  EOS
-end
-
-def link_path_manpages(path, command)
-  link_src_dst_dirs(path/"man", HOMEBREW_PREFIX/"share/man", command)
 end
 
 def migrate_legacy_keg_symlinks_if_necessary

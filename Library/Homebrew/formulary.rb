@@ -4,7 +4,7 @@ require "tap"
 # The Formulary is responsible for creating instances of Formula.
 # It is not meant to be used directly from formulae.
 
-class Formulary
+module Formulary
   FORMULAE = {}
 
   def self.formula_class_defined?(path)
@@ -22,7 +22,11 @@ class Formulary
 
     mod = Module.new
     const_set(namespace, mod)
-    mod.module_eval(contents, path)
+    begin
+      mod.module_eval(contents, path)
+    rescue ScriptError => e
+      raise FormulaUnreadableError.new(name, e)
+    end
     class_name = class_s(name)
 
     begin
@@ -186,6 +190,8 @@ class Formulary
           name = new_name
           new_name = @tap.core_tap? ? name : "#{@tap}/#{name}"
         elsif (new_tap_name = @tap.tap_migrations[name])
+          new_tap_user, new_tap_repo, = new_tap_name.split("/")
+          new_tap_name = "#{new_tap_user}/#{new_tap_repo}"
           new_tap = Tap.fetch new_tap_name
           new_tap.install unless new_tap.installed?
           new_tapped_name = "#{new_tap_name}/#{name}"
@@ -333,7 +339,9 @@ class Formulary
       return TapLoader.new(ref, from: from)
     end
 
-    return FromPathLoader.new(ref) if File.extname(ref) == ".rb"
+    if File.extname(ref) == ".rb" && Pathname.new(ref).expand_path.exist?
+      return FromPathLoader.new(ref)
+    end
 
     formula_with_that_name = core_path(ref)
     if formula_with_that_name.file?
@@ -374,6 +382,11 @@ class Formulary
 
     unless possible_tap_newname_formulae.empty?
       return TapLoader.new(possible_tap_newname_formulae.first, from: from)
+    end
+
+    possible_keg_formula = Pathname.new("#{HOMEBREW_PREFIX}/opt/#{ref}/.brew/#{ref}.rb")
+    if possible_keg_formula.file?
+      return FormulaLoader.new(ref, possible_keg_formula)
     end
 
     possible_cached_formula = Pathname.new("#{HOMEBREW_CACHE_FORMULA}/#{ref}.rb")

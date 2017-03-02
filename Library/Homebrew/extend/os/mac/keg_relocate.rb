@@ -6,7 +6,9 @@ class Keg
 
         each_install_name_for(file) do |bad_name|
           # Don't fix absolute paths unless they are rooted in the build directory
-          next if bad_name.start_with?("/") && !bad_name.start_with?(HOMEBREW_TEMP.to_s)
+          next if bad_name.start_with?("/") &&
+                  !bad_name.start_with?(HOMEBREW_TEMP.to_s) &&
+                  !bad_name.start_with?(HOMEBREW_TEMP.realpath.to_s)
 
           new_name = fixed_name(file, bad_name)
           change_install_name(bad_name, new_name, file) unless new_name == bad_name
@@ -76,13 +78,19 @@ class Keg
     end
   end
 
+  def filename_contains_metavariable?(fn)
+    fn =~ /^@(loader_|executable_|r)path/
+  end
+
   def each_install_name_for(file, &block)
     dylibs = file.dynamically_linked_libraries
-    dylibs.reject! { |fn| fn =~ /^@(loader_|executable_|r)path/ }
+    dylibs.reject! { |fn| filename_contains_metavariable?(fn) }
     dylibs.each(&block)
   end
 
   def dylib_id_for(file)
+    return file.dylib_id if filename_contains_metavariable?(file.dylib_id)
+
     # The new dylib ID should have the same basename as the old dylib ID, not
     # the basename of the file itself.
     basename = File.basename(file.dylib_id)

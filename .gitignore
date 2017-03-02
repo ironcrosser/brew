@@ -38,6 +38,13 @@
 !/docs
 !/manpages
 
+# Ignore generated documentation site
+/docs/_site
+/docs/.bundle
+/docs/bin
+/docs/vendor
+/docs/Gemfile.lock
+
 # Unignore our shell completion
 !/completions
 
@@ -49,3 +56,6 @@
 !/CONTRIBUTING.md
 !/LICENSE.txt
 !/README.md
+
+# Unignore tests' bundle config
+!/Library/Homebrew/test/.bundle

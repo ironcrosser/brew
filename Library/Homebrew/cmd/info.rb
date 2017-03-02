@@ -4,7 +4,7 @@
 #:  * `info` `--github` <formula>:
 #:    Open a browser to the GitHub History page for formula <formula>.
 #:
-#:    To view formula history locally: `brew log -p <formula>`.
+#:    To view formula history locally: `brew log -p <formula>`
 #:
 #:  * `info` `--json=`<version> (`--all`|`--installed`|<formulae>):
 #:    Print a JSON representation of <formulae>. Currently the only accepted value
@@ -13,8 +13,8 @@
 #:    Pass `--all` to get information on all formulae, or `--installed` to get
 #:    information on all installed formulae.
 #:
-#:    See the docs for examples of using the JSON:
-#:    <https://github.com/Homebrew/brew/blob/master/docs/Querying-Brew.md>
+#:    See the docs for examples of using the JSON output:
+#:    <http://docs.brew.sh/Querying-Brew.html>
 
 require "blacklist"
 require "caveats"

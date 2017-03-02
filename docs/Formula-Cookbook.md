@@ -1,5 +1,6 @@
 # Formula Cookbook
-A formula is a package definition written in Ruby. It can be created with `brew create $URL`, installed with `brew install $FORMULA`, and debugged with `brew install --debug --verbose $FORMULA`. Formulae use the [Formula API](http://www.rubydoc.info/github/Homebrew/brew/master/Formula) which provides various Homebrew-specific helpers.
+
+A formula is a package definition written in Ruby. It can be created with `brew create $URL` where `$URL` is a zip or tarball, installed with `brew install $FORMULA`, and debugged with `brew install --debug --verbose $FORMULA`. Formulae use the [Formula API](http://www.rubydoc.info/github/Homebrew/brew/master/Formula) which provides various Homebrew-specific helpers.
 
 ## Homebrew Terminology
 
@@ -9,11 +10,11 @@ A formula is a package definition written in Ruby. It can be created with `brew 
 | **Keg**        | The installation prefix of a **Formula**                   | `/usr/local/Cellar/foo/0.1`                                     |
 | **opt prefix** | A symlink to the active version of a **Keg**               | `/usr/local/opt/foo `                                           |
 | **Cellar**     | All **Kegs** are installed here                            | `/usr/local/Cellar`                                             |
-| **Tap**        | An optional Git repository of **Formulae** and/or commands | `/usr/local/Homebrew/Library/Taps/homebrew/homebrew-versions`   |
+| **Tap**        | A Git repository of **Formulae** and/or commands | `/usr/local/Homebrew/Library/Taps/homebrew/homebrew-core`   |
 | **Bottle**     | Pre-built **Keg** used instead of building from source     | `qt-4.8.4.mavericks.bottle.tar.gz`                              |
 | **Cask**       | An [extension of homebrew](https://github.com/caskroom/homebrew-cask) to install macOS native apps  | `/Applications/MacDown.app/Contents/SharedSupport/bin/macdown` |
 | **Brew Bundle**| An [extension of homebrew](https://github.com/Homebrew/homebrew-bundle) to describe dependencies    | `brew 'myservice', restart_service: true` |
- 
+
 ## An Introduction
 
 Homebrew uses Git for downloading updates and contributing to the project.
@@ -33,7 +34,7 @@ Before submitting a new formula make sure your package:
 *   isn't in another official [Homebrew tap](https://github.com/Homebrew)
 *   isn't already waiting to be merged (check the [issue tracker](https://github.com/Homebrew/homebrew-core/pulls))
 *   is still supported by upstream (i.e. doesn't require extensive patching)
-*   has a stable, tagged version (i.e. not just a GitHub repository with no versions). See [Interesting-Taps-&-Forks](Interesting-Taps-&-Forks.md) for where pre-release versions belong.
+*   has a stable, tagged version (i.e. not just a GitHub repository with no versions).
 *   passes all `brew audit --new-formula $FORMULA` tests.
 
 Before submitting a new formula make sure you read over our [contribution guidelines](https://github.com/Homebrew/brew/blob/master/CONTRIBUTING.md).
@@ -287,13 +288,13 @@ Name the formula like the project markets the product. So it’s `pkg-config`, n
 
 The only exception is stuff like “Apache Ant”. Apache sticks “Apache” in front of everything, but we use the formula name `ant`. We only include the prefix in cases like *GNUplot* (because it’s part of the name) and *GNU Go* (because everyone calls it “GNU go”—nobody just calls it “Go”). The word “Go” is too common and there are too many implementations of it.
 
-If you’re not sure about the name check the homepage, and check the Wikipedia page and [what Debian call it](https://www.debian.org/distrib/packages).
+If you’re not sure about the name check the homepage, and check the Wikipedia page and [what Debian calls it](https://www.debian.org/distrib/packages).
 
-Where Homebrew already has a formula called `foo` we typically do not accept requests to replace that formula with something else also named `foo`. This is to avoid both confusing and surprising users’ expectation.
+Where Homebrew already has a formula called `foo` we typically do not accept requests to replace that formula with something else also named `foo`. This is to avoid both confusing and surprising users’ expectations.
 
 When two formulae share an upstream name, e.g. [`AESCrypt`](https://github.com/Homebrew/homebrew-core/blob/master/Formula/aescrypt.rb) and [`AESCrypt`](https://github.com/Homebrew/homebrew-core/blob/master/Formula/aescrypt-packetizer.rb) the newer formula must typically adapt the name to avoid conflict with the current formula.
 
-If you’re *still* not sure, just commit. We’ll apply some arbitrary rule and make a decision :wink:.
+If you’re *still* not sure, just commit. We’ll apply some arbitrary rule and make a decision 😉.
 
 When importing classes, Homebrew will require the formula and then create an instance of the class. It does this by assuming the formula name can be directly converted to the class name using a `regexp`. The rules are simple:
 
@@ -352,12 +353,13 @@ If you have already forked Homebrew on GitHub, then you can manually push (just 
 git push https://github.com/myname/homebrew-core/ <what-you-called-your-branch>
 ```
 
-Now, please [open a pull request](https://github.com/Homebrew/brew/blob/master/docs/How-To-Open-a-Homebrew-Pull-Request-(and-get-it-merged).md#how-to-open-a-homebrew-pull-request-and-get-it-merged) for your changes.
+Now, please [open a pull request](http://docs.brew.sh/How-To-Open-a-Homebrew-Pull-Request.html) for your changes.
 
 *   One formula per commit; one commit per formula
 *   Keep merge commits out of the pull request
 
 # Convenience Tools
+
 ## Messaging
 
 Three commands are provided for displaying informational messages to the user:
@@ -781,6 +783,8 @@ The symlinks created by `install_symlink` are guaranteed to be relative. `ln_s` 
 ## Handling files that should persist over formula upgrades
 
 For example, Ruby 1.9’s gems should be installed to `var/lib/ruby/` so that gems don’t need to be reinstalled when upgrading Ruby. You can usually do this with symlink trickery, or *better* a configure option.
+
+Another example would be configuration files that should not be overwritten on package upgrades. If after installation you find that to-be-persisted configuration files are not copied but instead *symlinked* into `/usr/local/etc/` from the Cellar, this can often be rectified by passing an appropriate argument to the package’s configure script. That argument will vary depending on a given package’s configure script and/or Makefile, but one example might be: `--sysconfdir=#{etc}`
 
 ### launchd plist files
 

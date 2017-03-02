@@ -82,6 +82,9 @@ unset GEM_PATH
 # bash processes inside builds
 unset BASH_ENV
 
+# Users may have this set, breaking grep's output.
+unset GREP_OPTIONS
+
 HOMEBREW_SYSTEM="$(uname -s)"
 case "$HOMEBREW_SYSTEM" in
   Darwin) HOMEBREW_MACOS="1" ;;
@@ -204,6 +207,7 @@ case "$HOMEBREW_COMMAND" in
   up)          HOMEBREW_COMMAND="update" ;;
   ln)          HOMEBREW_COMMAND="link" ;;
   instal)      HOMEBREW_COMMAND="install" ;; # gem does the same
+  uninstal)    HOMEBREW_COMMAND="uninstall" ;;
   rm)          HOMEBREW_COMMAND="uninstall" ;;
   remove)      HOMEBREW_COMMAND="uninstall" ;;
   configure)   HOMEBREW_COMMAND="diy" ;;

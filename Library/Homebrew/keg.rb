@@ -87,11 +87,23 @@ class Keg
     mime-info pixmaps sounds postgresql
   ].freeze
 
-  # Will return some kegs, and some dependencies, if they're present.
+  # Given an array of kegs, this method will try to find some other kegs
+  # that depend on them.
+  #
+  # If it does, it returns:
+  # - some kegs in the passed array that have installed dependents
+  # - some installed dependents of those kegs.
+  #
+  # If it doesn't, it returns nil.
+  #
+  # Note that nil will be returned if the only installed dependents
+  # in the passed kegs are other kegs in the array.
+  #
   # For efficiency, we don't bother trying to get complete data.
   def self.find_some_installed_dependents(kegs)
     # First, check in the tabs of installed Formulae.
     kegs.each do |keg|
+      # Don't include dependencies of kegs that were in the given array.
       dependents = keg.installed_dependents - kegs
       dependents.map! { |d| "#{d.name} #{d.version}" }
       return [keg], dependents if dependents.any?
@@ -105,11 +117,27 @@ class Keg
     #
     # This happens after the initial dependency check because it's sloooow.
     remaining_formulae = Formula.installed.select do |f|
-      f.installed_kegs.any? { |k| Tab.for_keg(k).runtime_dependencies.nil? }
+      installed_kegs = f.installed_kegs
+
+      # Don't include dependencies of kegs that were in the given array.
+      next false if (installed_kegs - kegs).empty?
+
+      installed_kegs.any? { |k| Tab.for_keg(k).runtime_dependencies.nil? }
     end
 
     keg_names = kegs.map(&:name)
-    kegs_by_source = kegs.group_by { |k| [k.name, Tab.for_keg(k).tap] }
+    kegs_by_source = kegs.group_by do |keg|
+      begin
+        # First, attempt to resolve the keg to a formula
+        # to get up-to-date name and tap information.
+        f = keg.to_formula
+        [f.name, f.tap]
+      rescue FormulaUnavailableError
+        # If the formula for the keg can't be found,
+        # fall back to the information in the tab.
+        [keg.name, Tab.for_keg(keg).tap]
+      end
+    end
 
     remaining_formulae.each do |dependent|
       required = dependent.missing_dependencies(hide: keg_names)
@@ -119,7 +147,7 @@ class Keg
         next unless f_kegs
 
         f_kegs.sort_by(&:version).last
-      end
+      end.compact
 
       next unless required_kegs.any?
 
@@ -139,31 +167,35 @@ class Keg
     raise NotAKegError, "#{path} is not inside a keg"
   end
 
+  def self.all
+    Formula.racks.flat_map(&:subdirs).map { |d| new(d) }
+  end
+
   attr_reader :path, :name, :linked_keg_record, :opt_record
   protected :path
 
+  extend Forwardable
+
+  def_delegators :path,
+    :to_s, :hash, :abv, :disk_usage, :file_count, :directory?, :exist?, :/,
+    :join, :rename, :find
+
   def initialize(path)
+    path = path.resolved_path if path.to_s.start_with?("#{HOMEBREW_PREFIX}/opt/")
     raise "#{path} is not a valid keg" unless path.parent.parent.realpath == HOMEBREW_CELLAR.realpath
     raise "#{path} is not a directory" unless path.directory?
     @path = path
     @name = path.parent.basename.to_s
     @linked_keg_record = HOMEBREW_LINKED_KEGS/name
     @opt_record = HOMEBREW_PREFIX/"opt/#{name}"
-  end
-
-  def to_s
-    path.to_s
+    @require_relocation = false
   end
 
   def rack
     path.parent
   end
 
-  if Pathname.method_defined?(:to_path)
-    alias to_path to_s
-  else
-    alias to_str to_s
-  end
+  alias to_path to_s
 
   def inspect
     "#<#{self.class.name}:#{path}>"
@@ -174,33 +206,9 @@ class Keg
   end
   alias eql? ==
 
-  def hash
-    path.hash
-  end
-
-  def abv
-    path.abv
-  end
-
-  def disk_usage
-    path.disk_usage
-  end
-
-  def file_count
-    path.file_count
-  end
-
-  def directory?
-    path.directory?
-  end
-
-  def exist?
-    path.exist?
-  end
-
   def empty_installation?
-    Pathname.glob("#{path}/**/*") do |file|
-      next if file.directory?
+    Pathname.glob("#{path}/*") do |file|
+      return false if file.directory? && !file.children.reject(&:ds_store?).empty?
       basename = file.basename.to_s
       next if Metafiles.copy?(basename)
       next if %w[.DS_Store INSTALL_RECEIPT.json].include?(basename)
@@ -210,16 +218,8 @@ class Keg
     true
   end
 
-  def /(other)
-    path / other
-  end
-
-  def join(*args)
-    path.join(*args)
-  end
-
-  def rename(*args)
-    path.rename(*args)
+  def require_relocation?
+    @require_relocation
   end
 
   def linked?
@@ -239,6 +239,10 @@ class Keg
 
   def remove_opt_record
     opt_record.unlink
+    aliases.each do |a|
+      next if !opt_record.symlink? && !opt_record.exist?
+      (opt_record.parent/a).delete
+    end
     opt_record.parent.rmdir_if_possible
   end
 
@@ -334,10 +338,6 @@ class Keg
     Pathname.glob("#{app_prefix}/{,libexec/}*.app")
   end
 
-  def app_installed?
-    !apps.empty?
-  end
-
   def elisp_installed?
     return false unless (path/"share/emacs/site-lisp"/name).exist?
     (path/"share/emacs/site-lisp"/name).children.any? { |f| %w[.el .elc].include? f.extname }
@@ -353,20 +353,22 @@ class Keg
   end
 
   def installed_dependents
-    Formula.installed.flat_map(&:installed_kegs).select do |keg|
+    return [] unless optlinked?
+    tap = Tab.for_keg(self).source["tap"]
+    Keg.all.select do |keg|
       tab = Tab.for_keg(keg)
-      next if tab.runtime_dependencies.nil? # no dependency information saved.
+      next if tab.runtime_dependencies.nil?
       tab.runtime_dependencies.any? do |dep|
         # Resolve formula rather than directly comparing names
         # in case of conflicts between formulae from different taps.
-        dep_formula = Formulary.factory(dep["full_name"])
-        dep_formula == to_formula && dep["version"] == version.to_s
+        begin
+          dep_formula = Formulary.factory(dep["full_name"])
+          dep_formula == to_formula
+        rescue FormulaUnavailableError
+          next "#{tap}/#{name}" == dep["full_name"]
+        end
       end
     end
-  end
-
-  def find(*args, &block)
-    path.find(*args, &block)
   end
 
   def oldname_opt_record
@@ -463,9 +465,20 @@ class Keg
     @oldname_opt_record = nil
   end
 
+  def aliases
+    Formula[rack.basename.to_s].aliases
+  rescue FormulaUnavailableError
+    []
+  end
+
   def optlink(mode = OpenStruct.new)
     opt_record.delete if opt_record.symlink? || opt_record.exist?
     make_relative_symlink(opt_record, path, mode)
+    aliases.each do |a|
+      alias_opt_record = opt_record.parent/a
+      alias_opt_record.delete if alias_opt_record.symlink? || alias_opt_record.exist?
+      make_relative_symlink(alias_opt_record, path, mode)
+    end
 
     return unless oldname_opt_record
     oldname_opt_record.delete
@@ -559,7 +572,7 @@ class Keg
 
       if src.symlink? || src.file?
         Find.prune if File.basename(src) == ".DS_Store"
-        Find.prune if src.realpath == dst
+        Find.prune if src.resolved_path == dst
         # Don't link pyc or pyo files because Python overwrites these
         # cached object files and next time brew wants to link, the
         # file is in the way.

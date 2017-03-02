@@ -35,7 +35,7 @@ module Homebrew
         ohai "Homebrew has enabled anonymous aggregate user behaviour analytics."
         puts <<-EOS.undent
           #{Tty.bold}Read the analytics documentation (and how to opt-out) here:
-            #{Formatter.url("https://git.io/brew-analytics")}#{Tty.reset}
+            #{Formatter.url("http://docs.brew.sh/Analytics.html")}#{Tty.reset}
 
         EOS
 
@@ -104,8 +104,8 @@ module Homebrew
       puts if ARGV.include?("--preinstall")
     end
 
-    link_completions_and_docs
-    Tap.each(&:link_manpages)
+    link_completions_manpages_and_docs
+    Tap.each(&:link_completions_and_manpages)
 
     Homebrew.failed = true if ENV["HOMEBREW_UPDATE_FAILED"]
 
@@ -281,7 +281,7 @@ module Homebrew
       EOS
     end
 
-    link_completions_and_docs(new_homebrew_repository)
+    link_completions_manpages_and_docs(new_homebrew_repository)
 
     ohai "Migrated HOMEBREW_REPOSITORY to #{new_homebrew_repository}!"
     puts <<-EOS.undent
@@ -302,16 +302,11 @@ module Homebrew
     $stderr.puts e.backtrace
   end
 
-  def link_completions_and_docs(repository = HOMEBREW_REPOSITORY)
+  def link_completions_manpages_and_docs(repository = HOMEBREW_REPOSITORY)
     command = "brew update"
-    link_src_dst_dirs(repository/"completions/bash",
-                      HOMEBREW_PREFIX/"etc/bash_completion.d", command)
-    link_src_dst_dirs(repository/"docs",
-                      HOMEBREW_PREFIX/"share/doc/homebrew", command, link_dir: true)
-    link_src_dst_dirs(repository/"completions/zsh",
-                      HOMEBREW_PREFIX/"share/zsh/site-functions", command)
-    link_src_dst_dirs(repository/"manpages",
-                      HOMEBREW_PREFIX/"share/man/man1", command)
+    Utils::Link.link_completions(repository, command)
+    Utils::Link.link_manpages(repository, command)
+    Utils::Link.link_docs(repository, command)
   rescue => e
     ofail <<-EOS.undent
       Failed to link all completions, docs and manpages:
@@ -387,7 +382,7 @@ class Reporter
       end
     end
 
-    renamed_formulae = []
+    renamed_formulae = Set.new
     @report[:D].each do |old_full_name|
       old_name = old_full_name.split("/").last
       new_name = tap.formula_renames[old_name]
@@ -402,10 +397,24 @@ class Reporter
       renamed_formulae << [old_full_name, new_full_name] if @report[:A].include? new_full_name
     end
 
+    @report[:A].each do |new_full_name|
+      new_name = new_full_name.split("/").last
+      old_name = tap.formula_renames.key(new_name)
+      next unless old_name
+
+      if tap.core_tap?
+        old_full_name = old_name
+      else
+        old_full_name = "#{tap}/#{old_name}"
+      end
+
+      renamed_formulae << [old_full_name, new_full_name]
+    end
+
     unless renamed_formulae.empty?
       @report[:A] -= renamed_formulae.map(&:last)
       @report[:D] -= renamed_formulae.map(&:first)
-      @report[:R] = renamed_formulae
+      @report[:R] = renamed_formulae.to_a
     end
 
     @report
@@ -421,18 +430,27 @@ class Reporter
       new_tap_name = tap.tap_migrations[name]
       next if new_tap_name.nil? # skip if not in tap_migrations list.
 
+      new_tap_user, new_tap_repo, new_tap_new_name = new_tap_name.split("/")
+      new_name = if new_tap_new_name
+        new_full_name = new_tap_new_name
+        new_tap_name = "#{new_tap_user}/#{new_tap_repo}"
+        new_tap_new_name
+      else
+        new_full_name = "#{new_tap_name}/#{name}"
+        name
+      end
+
       # This means it is a Cask
       if report[:DC].include? full_name
-        next unless (HOMEBREW_PREFIX/"Caskroom"/name).exist?
+        next unless (HOMEBREW_PREFIX/"Caskroom"/new_name).exist?
         new_tap = Tap.fetch(new_tap_name)
         new_tap.install unless new_tap.installed?
         ohai "#{name} has been moved to Homebrew.", <<-EOS.undent
           To uninstall the cask run:
             brew cask uninstall --force #{name}
         EOS
-        new_full_name = "#{new_tap_name}/#{name}"
-        next if (HOMEBREW_CELLAR/name.split("/").last).directory?
-        ohai "Installing #{name}..."
+        next if (HOMEBREW_CELLAR/new_name.split("/").last).directory?
+        ohai "Installing #{new_name}..."
         system HOMEBREW_BREW_FILE, "install", new_full_name
         begin
           unless Formulary.factory(new_full_name).keg_only?
@@ -452,17 +470,23 @@ class Reporter
       if new_tap_name == "caskroom/cask"
         if new_tap.installed? && (HOMEBREW_PREFIX/"Caskroom").directory?
           ohai "#{name} has been moved to Homebrew-Cask."
-          ohai "brew uninstall --force #{name}"
-          system HOMEBREW_BREW_FILE, "uninstall", "--force", name
+          ohai "brew unlink #{name}"
+          system HOMEBREW_BREW_FILE, "unlink", name
           ohai "brew prune"
           system HOMEBREW_BREW_FILE, "prune"
-          ohai "brew cask install #{name}"
-          system HOMEBREW_BREW_FILE, "cask", "install", name
+          ohai "brew cask install #{new_name}"
+          system HOMEBREW_BREW_FILE, "cask", "install", new_name
+          ohai <<-EOS.undent
+            #{name} has been moved to Homebrew-Cask.
+            The existing keg has been unlinked.
+            Please uninstall the formula when convenient by running:
+              brew uninstall --force #{name}
+          EOS
         else
           ohai "#{name} has been moved to Homebrew-Cask.", <<-EOS.undent
             To uninstall the formula and install the cask run:
               brew uninstall --force #{name}
-              brew cask install #{name}
+              brew cask install #{new_name}
           EOS
         end
       else

@@ -1,10 +1,10 @@
-# brew tap
+# Taps (third-party repositories)
 
 `brew tap` adds more repos to the list of formulae that `brew` tracks, updates,
 and installs from. By default, `tap` assumes that the repos come from GitHub,
 but the command isn't limited to any one location.
 
-## The command
+## The command (`brew tap`)
 
 * `brew tap` without arguments lists the currently tapped repositories. For
   example:
@@ -73,7 +73,7 @@ If you need a formula to be installed from a particular tap, you can use fully
 qualified names to refer to them.
 
 For example, you can create a tap for an alternative `vim` formula. Without
-pinning it, the behavior will be
+pinning it, the behaviour will be
 
 ```bash
 brew install vim                     # installs from homebrew/core
