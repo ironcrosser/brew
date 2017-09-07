@@ -3,6 +3,7 @@ require "rexml/document"
 require "time"
 
 class AbstractDownloadStrategy
+  extend Forwardable
   include FileUtils
 
   attr_reader :meta, :name, :version, :resource
@@ -139,7 +140,7 @@ class VCSDownloadStrategy < AbstractDownloadStrategy
     super
     @ref_type, @ref = extract_ref(meta)
     @revision = meta[:revision]
-    @clone = HOMEBREW_CACHE.join(cache_filename)
+    @clone = HOMEBREW_CACHE/cache_filename
   end
 
   def fetch
@@ -181,9 +182,7 @@ class VCSDownloadStrategy < AbstractDownloadStrategy
     @clone
   end
 
-  def head?
-    version.head?
-  end
+  delegate head?: :version
 
   # Return last commit's unique identifier for the repository.
   # Return most recent modified timestamp unless overridden.
@@ -322,7 +321,7 @@ class CurlDownloadStrategy < AbstractFileDownloadStrategy
   def initialize(name, resource)
     super
     @mirrors = resource.mirrors.dup
-    @tarball_path = HOMEBREW_CACHE.join("#{name}-#{version}#{ext}")
+    @tarball_path = HOMEBREW_CACHE/"#{name}-#{version}#{ext}"
     @temporary_path = Pathname.new("#{cached_location}.incomplete")
   end
 
@@ -338,7 +337,7 @@ class CurlDownloadStrategy < AbstractFileDownloadStrategy
       rescue ErrorDuringExecution
         # 33 == range not supported
         # try wiping the incomplete download and retrying once
-        unless $?.exitstatus == 33 && had_incomplete_download
+        unless $CHILD_STATUS.exitstatus == 33 && had_incomplete_download
           raise CurlDownloadStrategyError, @url
         end
 
@@ -376,75 +375,59 @@ class CurlDownloadStrategy < AbstractFileDownloadStrategy
       ohai "Downloading from #{url}"
     end
 
-    urls = actual_urls(url)
-    unless urls.empty?
-      ohai "Downloading from #{urls.last}"
-      if !ENV["HOMEBREW_NO_INSECURE_REDIRECT"].nil? && url.start_with?("https://") &&
-         urls.any? { |u| !u.start_with? "https://" }
-        puts "HTTPS to HTTP redirect detected & HOMEBREW_NO_INSECURE_REDIRECT is set."
-        raise CurlDownloadStrategyError, url
-      end
-      url = urls.last
-    end
-
-    curl url, "-C", downloaded_size, "-o", temporary_path
+    curl_download resolved_url(url), to: temporary_path
   end
 
   # Curl options to be always passed to curl,
-  # with raw head calls (`curl -I`) or with actual `fetch`.
+  # with raw head calls (`curl --head`) or with actual `fetch`.
   def _curl_opts
-    copts = []
-    copts << "--user" << meta.fetch(:user) if meta.key?(:user)
-    copts
+    return ["--user", meta.fetch(:user)] if meta.key?(:user)
+    []
   end
 
-  def actual_urls(url)
-    urls = []
-    curl_args = _curl_opts << "-I" << "-L" << url
-    Utils.popen_read("curl", *curl_args).scan(/^Location: (.+)$/).map do |m|
-      urls << URI.join(urls.last || url, m.first.chomp).to_s
+  def resolved_url(url)
+    redirect_url, _, status = curl_output(
+      *_curl_opts, "--silent", "--head",
+      "--write-out", "%{redirect_url}",
+      "--output", "/dev/null",
+      url.to_s
+    )
+
+    return url unless status.success?
+    return url if redirect_url.empty?
+
+    ohai "Downloading from #{redirect_url}"
+    if ENV["HOMEBREW_NO_INSECURE_REDIRECT"] &&
+       url.start_with?("https://") && !redirect_url.start_with?("https://")
+      puts "HTTPS to HTTP redirect detected & HOMEBREW_NO_INSECURE_REDIRECT is set."
+      raise CurlDownloadStrategyError, url
     end
-    urls
+
+    redirect_url
   end
 
-  def downloaded_size
-    temporary_path.size? || 0
-  end
-
-  def curl(*args)
+  def curl(*args, **options)
     args.concat _curl_opts
     args << "--connect-timeout" << "5" unless mirrors.empty?
-    super
+    super(*args, **options)
   end
 end
 
 # Detect and download from Apache Mirror
 class CurlApacheMirrorDownloadStrategy < CurlDownloadStrategy
   def apache_mirrors
-    rd, wr = IO.pipe
-    buf = ""
+    mirrors, = Open3.capture3(
+      *curl_args(*_curl_opts, "--silent", "--location", "#{@url}&asjson=1"),
+    )
 
-    pid = fork do
-      ENV.delete "HOMEBREW_CURL_VERBOSE"
-      rd.close
-      $stdout.reopen(wr)
-      $stderr.reopen(wr)
-      curl "#{@url}&asjson=1"
-    end
-    wr.close
-
-    rd.readline if ARGV.verbose? # Remove Homebrew output
-    buf << rd.read until rd.eof?
-    rd.close
-    Process.wait(pid)
-    buf
+    JSON.parse(mirrors)
   end
 
   def _fetch
     return super if @tried_apache_mirror
     @tried_apache_mirror = true
 
-    mirrors = JSON.parse(apache_mirrors)
+    mirrors = apache_mirrors
     path_info = mirrors.fetch("path_info")
     @url = mirrors.fetch("preferred") + path_info
     @mirrors |= %W[https://archive.apache.org/dist/#{path_info}]
@@ -461,7 +444,7 @@ end
 class CurlPostDownloadStrategy < CurlDownloadStrategy
   def _fetch
     base_url, data = @url.split("?")
-    curl base_url, "-d", data, "-C", downloaded_size, "-o", temporary_path
+    curl_download base_url, "--data", data, to: temporary_path
   end
 end
 
@@ -517,8 +500,11 @@ class S3DownloadStrategy < CurlDownloadStrategy
     if @url !~ %r{^https?://([^.].*)\.s3\.amazonaws\.com/(.+)$}
       raise "Bad S3 URL: " + @url
     end
-    bucket = $1
-    key = $2
+    bucket = Regexp.last_match(1)
+    key = Regexp.last_match(2)
+
+    ENV["AWS_ACCESS_KEY_ID"] = ENV["HOMEBREW_AWS_ACCESS_KEY_ID"]
+    ENV["AWS_SECRET_ACCESS_KEY"] = ENV["HOMEBREW_AWS_SECRET_ACCESS_KEY"]
 
     obj = AWS::S3.new.buckets[bucket].objects[key]
     begin
@@ -528,7 +514,7 @@ class S3DownloadStrategy < CurlDownloadStrategy
       s3url = obj.public_url
     end
 
-    curl s3url, "-C", downloaded_size, "-o", temporary_path
+    curl_download s3url, to: temporary_path
   end
 end
 
@@ -538,7 +524,7 @@ end
 # your formula. This download strategy uses GitHub access tokens (in the
 # environment variables HOMEBREW_GITHUB_API_TOKEN) to sign the request.  This
 # strategy is suitable for corporate use just like S3DownloadStrategy, because
-# it lets you use a private GttHub repository for internal distribution.  It
+# it lets you use a private GitHub repository for internal distribution.  It
 # works with public one, but in that case simply use CurlDownloadStrategy.
 class GitHubPrivateRepositoryDownloadStrategy < CurlDownloadStrategy
   require "utils/formatter"
@@ -564,7 +550,7 @@ class GitHubPrivateRepositoryDownloadStrategy < CurlDownloadStrategy
   end
 
   def _fetch
-    curl download_url, "-C", downloaded_size, "-o", temporary_path
+    curl_download download_url, to: temporary_path
   end
 
   private
@@ -613,7 +599,7 @@ class GitHubPrivateRepositoryReleaseDownloadStrategy < GitHubPrivateRepositoryDo
   def _fetch
     # HTTP request header `Accept: application/octet-stream` is required.
     # Without this, the GitHub API will respond with metadata, not binary.
-    curl download_url, "-C", downloaded_size, "-o", temporary_path, "-H", "Accept: application/octet-stream"
+    curl_download download_url, "--header", "Accept: application/octet-stream", to: temporary_path
   end
 
   private
@@ -695,7 +681,7 @@ class SubversionDownloadStrategy < VCSDownloadStrategy
   end
 
   def repo_valid?
-    cached_location.join(".svn").directory?
+    (cached_location/".svn").directory?
   end
 
   def clone_repo
@@ -708,7 +694,7 @@ class SubversionDownloadStrategy < VCSDownloadStrategy
       fetch_repo cached_location, @url, main_revision, true
 
       externals do |external_name, external_url|
-        fetch_repo cached_location+external_name, external_url, @ref[external_name], true
+        fetch_repo cached_location/external_name, external_url, @ref[external_name], true
       end
     else
       fetch_repo cached_location, @url
@@ -770,7 +756,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
   end
 
   def shallow_dir?
-    git_dir.join("shallow").exist?
+    (git_dir/"shallow").exist?
   end
 
   def support_depth?
@@ -778,7 +764,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
   end
 
   def git_dir
-    cached_location.join(".git")
+    cached_location/".git"
   end
 
   def ref?
@@ -794,7 +780,7 @@ class GitDownloadStrategy < VCSDownloadStrategy
   end
 
   def submodules?
-    cached_location.join(".gitmodules").exist?
+    (cached_location/".gitmodules").exist?
   end
 
   def clone_args
@@ -913,18 +899,27 @@ class GitHubGitDownloadStrategy < GitDownloadStrategy
   def github_last_commit
     return if ENV["HOMEBREW_NO_GITHUB_API"]
 
-    output, _, status = curl_output "-H", "Accept: application/vnd.github.v3.sha", \
-      "-I", "https://api.github.com/repos/#{@user}/#{@repo}/commits/#{@ref}"
+    output, _, status = curl_output(
+      "--silent", "--head", "--location",
+      "-H", "Accept: application/vnd.github.v3.sha",
+      "https://api.github.com/repos/#{@user}/#{@repo}/commits/#{@ref}"
+    )
 
-    commit = output[/^ETag: \"(\h+)\"/, 1] if status.success?
+    return unless status.success?
+
+    commit = output[/^ETag: \"(\h+)\"/, 1]
     version.update_commit(commit) if commit
     commit
   end
 
   def multiple_short_commits_exist?(commit)
     return if ENV["HOMEBREW_NO_GITHUB_API"]
-    output, _, status = curl_output "-H", "Accept: application/vnd.github.v3.sha", \
-      "-I", "https://api.github.com/repos/#{@user}/#{@repo}/commits/#{commit}"
+
+    output, _, status = curl_output(
+      "--silent", "--head", "--location",
+      "-H", "Accept: application/vnd.github.v3.sha",
+      "https://api.github.com/repos/#{@user}/#{@repo}/commits/#{commit}"
+    )
 
     !(status.success? && output && output[/^Status: (200)/, 1] == "200")
   end
@@ -984,7 +979,7 @@ class CVSDownloadStrategy < VCSDownloadStrategy
   end
 
   def repo_valid?
-    cached_location.join("CVS").directory?
+    (cached_location/"CVS").directory?
   end
 
   def clone_repo
@@ -1001,8 +996,8 @@ class CVSDownloadStrategy < VCSDownloadStrategy
 
   def split_url(in_url)
     parts = in_url.split(/:/)
-    mod=parts.pop
-    url=parts.join(":")
+    mod = parts.pop
+    url = parts.join(":")
     [mod, url]
   end
 end
@@ -1042,7 +1037,7 @@ class MercurialDownloadStrategy < VCSDownloadStrategy
   end
 
   def repo_valid?
-    cached_location.join(".hg").directory?
+    (cached_location/".hg").directory?
   end
 
   def clone_repo
@@ -1082,7 +1077,7 @@ class BazaarDownloadStrategy < VCSDownloadStrategy
   end
 
   def repo_valid?
-    cached_location.join(".bzr").directory?
+    (cached_location/".bzr").directory?
   end
 
   def clone_repo
@@ -1157,15 +1152,13 @@ class DownloadStrategyDetector
       SubversionDownloadStrategy
     when %r{^cvs://}
       CVSDownloadStrategy
-    when %r{^https?://(.+?\.)?googlecode\.com/hg}
-      MercurialDownloadStrategy
-    when %r{^hg://}
+    when %r{^hg://}, %r{^https?://(.+?\.)?googlecode\.com/hg}
       MercurialDownloadStrategy
     when %r{^bzr://}
       BazaarDownloadStrategy
     when %r{^fossil://}
       FossilDownloadStrategy
-    when %r{^http://svn\.apache\.org/repos/}, %r{^svn\+http://}
+    when %r{^svn\+http://}, %r{^http://svn\.apache\.org/repos/}
       SubversionDownloadStrategy
     when %r{^https?://(.+?\.)?sourceforge\.net/hgweb/}
       MercurialDownloadStrategy

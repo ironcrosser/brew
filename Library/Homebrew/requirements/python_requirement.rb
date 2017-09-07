@@ -3,7 +3,6 @@ require "language/python"
 class PythonRequirement < Requirement
   fatal true
   default_formula "python"
-  cask "python"
 
   satisfy build_env: false do
     python = which_python
@@ -19,10 +18,11 @@ class PythonRequirement < Requirement
 
     if !system_python? && short_version == Version.create("2.7")
       ENV.prepend_path "PATH", which_python.dirname
-    # Homebrew Python should take precedence over older Pythons in the PATH
-    elsif short_version != Version.create("2.7")
-      ENV.prepend_path "PATH", Formula["python"].opt_bin
     end
+
+    # Homebrew Python should take precedence over other Pythons in the PATH
+    ENV.prepend_path "PATH", Formula["python"].opt_bin
+    ENV.prepend_path "PATH", Formula["python"].opt_libexec/"bin"
 
     ENV["PYTHONPATH"] = "#{HOMEBREW_PREFIX}/lib/python#{short_version}/site-packages"
   end
@@ -56,7 +56,6 @@ end
 class Python3Requirement < PythonRequirement
   fatal true
   default_formula "python3"
-  cask "python3"
 
   satisfy(build_env: false) { which_python }
 

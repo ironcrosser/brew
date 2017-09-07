@@ -12,7 +12,9 @@ class JavaRequirement < Requirement
     javas = []
     javas << Pathname.new(ENV["JAVA_HOME"])/"bin/java" if ENV["JAVA_HOME"]
     javas << java_home_cmd
-    javas << which("java")
+    which_java = which("java")
+    # /usr/bin/java is a stub on macOS
+    javas << which_java if which_java.to_s != "/usr/bin/java"
     javas
   end
 
@@ -21,7 +23,7 @@ class JavaRequirement < Requirement
     args = %w[--failfast]
     args << "--version" << @version.to_s if @version
     java_home = Utils.popen_read("/usr/libexec/java_home", *args).chomp
-    return nil unless $?.success?
+    return nil unless $CHILD_STATUS.success?
     Pathname.new(java_home)/"bin/java"
   end
 

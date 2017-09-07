@@ -12,6 +12,8 @@ module Hardware
       def type
         @type ||= if cpuinfo =~ /Intel|AMD/
           :intel
+        elsif cpuinfo =~ /ARM|Marvell/
+          :arm
         else
           :dunno
         end
@@ -47,6 +49,8 @@ module Hardware
             :haswell
           when 0x3d, 0x47, 0x4f, 0x56
             :broadwell
+          when 0x5e
+            :skylake
           when 0x8e
             :kabylake
           else
@@ -71,7 +75,7 @@ module Hardware
       end
 
       def flags
-        @flags ||= cpuinfo[/^flags.*/, 0].split
+        @flags ||= cpuinfo[/^(flags|Features).*/, 0].split
       end
 
       # Compatibility with Mac method, which returns lowercase symbols
@@ -80,9 +84,18 @@ module Hardware
         @features ||= flags[1..-1].map(&:intern)
       end
 
-      %w[aes altivec avx avx2 lm sse3 ssse3 sse4 sse4_2].each do |flag|
+      %w[aes altivec avx avx2 lm ssse3 sse4_2].each do |flag|
         define_method(flag + "?") { flags.include? flag }
       end
+
+      def sse3?
+        flags.include?("pni") || flags.include?("sse3")
+      end
+
+      def sse4?
+        flags.include? "sse4_1"
+      end
+
       alias is_64_bit? lm?
 
       def bits

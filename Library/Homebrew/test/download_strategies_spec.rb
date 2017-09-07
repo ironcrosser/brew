@@ -147,18 +147,14 @@ describe GitDownloadStrategy do
   end
 
   def git_commit_all
-    shutup do
-      system "git", "add", "--all"
-      system "git", "commit", "-m", "commit number #{@commit_id}"
-      @commit_id += 1
-    end
+    system "git", "add", "--all"
+    system "git", "commit", "-m", "commit number #{@commit_id}"
+    @commit_id += 1
   end
 
   def setup_git_repo
-    shutup do
-      system "git", "init"
-      system "git", "remote", "add", "origin", "https://github.com/Homebrew/homebrew-foo"
-    end
+    system "git", "init"
+    system "git", "remote", "add", "origin", "https://github.com/Homebrew/homebrew-foo"
     FileUtils.touch "README"
     git_commit_all
   end
@@ -201,6 +197,17 @@ describe GitDownloadStrategy do
       subject.shutup!
       expect(subject.fetch_last_commit).to eq("f68266e")
     end
+  end
+end
+
+describe CurlDownloadStrategy do
+  subject { described_class.new(name, resource) }
+  let(:name) { "foo" }
+  let(:url) { "http://example.com/foo.tar.gz" }
+  let(:resource) { double(Resource, url: url, mirrors: [], specs: { user: "download:123456" }, version: nil) }
+
+  it "parses the opts and sets the corresponding args" do
+    expect(subject.send(:_curl_opts)).to eq(["--user", "download:123456"])
   end
 end
 

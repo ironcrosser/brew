@@ -1,63 +1,54 @@
 module Hbc
   class CLI
-    class InternalAuditModifiedCasks < InternalUseBase
+    class InternalAuditModifiedCasks < AbstractInternalCommand
       RELEVANT_STANZAS = [:version, :sha256, :url, :appcast].freeze
 
-      class << self
-        def needs_init?
-          true
-        end
+      option "--cleanup", :cleanup, false
 
-        def run(*args)
-          commit_range = commit_range(args)
-          cleanup = args.any? { |a| a =~ /^-+c(leanup)?$/i }
-          new(commit_range, cleanup: cleanup).run
-        end
+      def self.needs_init?
+        true
+      end
 
-        def commit_range(args)
-          posargs = args.reject { |a| a.empty? || a.chars.first == "-" }
-          odie usage unless posargs.size == 1
-          posargs.first
-        end
+      attr_accessor :commit_range
+      private :commit_range=
 
-        def posargs(args)
-          args.reject { |a| a.empty? || a.chars.first == "-" }
-        end
+      def initialize(*)
+        super
 
-        def usage
-          <<-EOS.undent
-            Usage: brew cask _audit_modified_casks [options...] <commit range>
+        if args.count != 1
+          raise ArgumentError, <<-EOS.undent
+            This command requires exactly one argument.
 
-            Given a range of Git commits, find any Casks that were modified and run `brew
-            cask audit' on them. If the `url', `version', or `sha256' stanzas were modified,
-            run with the `--download' flag to verify the hash.
-
-            Options:
-              -c, --cleanup
-                Remove all cached downloads. Use with care.
+            #{self.class.usage}
           EOS
         end
+
+        @commit_range = args.first
       end
 
-      def initialize(commit_range, cleanup: false)
-        @commit_range = commit_range
-        @cleanup = cleanup
+      def self.help
+        "audit all modified Casks in a given commit range"
       end
 
-      attr_reader :commit_range
+      def self.usage
+        <<-EOS.undent
+          Usage: brew cask _audit_modified_casks [options...] <commit range>
 
-      def cleanup?
-        @cleanup
+          Given a range of Git commits, find any Casks that were modified and run `brew
+          cask audit' on them. If the `url', `version', or `sha256' stanzas were modified,
+          run with the `--download' flag to verify the hash.
+
+          Options:
+            -c, --cleanup
+              Remove all cached downloads. Use with care.
+        EOS
       end
 
       def run
-        at_exit do
-          cleanup
-        end
-
         Dir.chdir git_root do
           modified_cask_files.zip(modified_casks).each do |cask_file, cask|
             audit(cask, cask_file)
+            Cleanup.run(cask) if cleanup?
           end
         end
         report_failures
@@ -82,10 +73,10 @@ module Hbc
 
       def modified_casks
         return @modified_casks if defined? @modified_casks
-        @modified_casks = modified_cask_files.map { |f| Hbc.load(f) }
+        @modified_casks = modified_cask_files.map { |f| CaskLoader.load(f) }
         if @modified_casks.any?
           num_modified = @modified_casks.size
-          ohai "#{num_modified} modified #{pluralize("cask", num_modified)}: " \
+          ohai "#{Formatter.pluralize(num_modified, "modified cask")}: " \
             "#{@modified_casks.join(" ")}"
         end
         @modified_casks
@@ -95,7 +86,8 @@ module Hbc
         audit_download = audit_download?(cask, cask_file)
         check_token_conflicts = added_cask_files.include?(cask_file)
         success = Auditor.audit(cask, audit_download:        audit_download,
-                                      check_token_conflicts: check_token_conflicts)
+                                      check_token_conflicts: check_token_conflicts,
+                                      commit_range: commit_range)
         failed_casks << cask unless success
       end
 
@@ -122,17 +114,8 @@ module Hbc
       def report_failures
         return if failed_casks.empty?
         num_failed = failed_casks.size
-        cask_pluralized = pluralize("cask", num_failed)
-        odie "audit failed for #{num_failed} #{cask_pluralized}: " \
+        odie "audit failed for #{Formatter.pluralize(num_failed, "cask")}: " \
           "#{failed_casks.join(" ")}"
-      end
-
-      def pluralize(str, num)
-        num == 1 ?  str : "#{str}s"
-      end
-
-      def cleanup
-        Cleanup.run if cleanup?
       end
     end
   end

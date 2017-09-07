@@ -31,13 +31,13 @@ class DevelopmentTools
       elsif MacOS.version == "10.8" || MacOS.version == "10.7"
         <<-EOS.undent
           Install the Command Line Tools from
-            https://developer.apple.com/downloads/
+            https://developer.apple.com/download/more/
           or via Xcode's preferences.
         EOS
       else
         <<-EOS.undent
           Install Xcode from
-            https://developer.apple.com/xcode/downloads/
+            https://developer.apple.com/download/more/
         EOS
       end
     end
@@ -78,8 +78,15 @@ class DevelopmentTools
     end
 
     def curl_handles_most_https_homepages?
-      # The system Curl is too old for some modern HTTPS homepages on Yosemite.
+      # The system Curl is too old for some modern HTTPS homepages on
+      # older macOS versions.
       MacOS.version >= :el_capitan
+    end
+
+    def subversion_handles_most_https_certificates?
+      # The system Subversion is too old for some HTTPS certificates on
+      # older macOS versions.
+      MacOS.version >= :sierra
     end
   end
 end

@@ -5,9 +5,9 @@ require "tab"
 require "test/support/fixtures/testball"
 require "test/support/fixtures/testball_bottle"
 
-RSpec::Matchers.alias_matcher :pour_bottle, :be_pour_bottle
-
 describe FormulaInstaller do
+  alias_matcher :pour_bottle, :be_pour_bottle
+
   matcher :be_poured_from_bottle do
     match(&:poured_from_bottle)
   end
@@ -17,9 +17,7 @@ describe FormulaInstaller do
     expect(formula).to be_bottled
     expect(formula).to pour_bottle
 
-    shutup do
-      described_class.new(formula).install
-    end
+    described_class.new(formula).install
 
     keg = Keg.new(formula.prefix)
 

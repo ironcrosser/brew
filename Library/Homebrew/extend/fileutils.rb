@@ -3,7 +3,7 @@ require "tmpdir"
 require "etc"
 
 # Homebrew extends Ruby's `FileUtils` to make our code more readable.
-# @see http://ruby-doc.org/stdlib-2.0.0/libdoc/fileutils/rdoc/FileUtils.html Ruby's FileUtils API
+# @see https://ruby-doc.org/stdlib-2.0.0/libdoc/fileutils/rdoc/FileUtils.html Ruby's FileUtils API
 module FileUtils
   # Create a temporary directory then yield. When the block returns,
   # recursively delete the temporary directory. Passing opts[:retain]
@@ -111,10 +111,18 @@ module FileUtils
   # path to the actually-installed make on Tiger or older.
   def make(*args)
     if Utils.popen_read("/usr/bin/make", "--version").match(/Make (\d\.\d+)/)[1] > "3.80"
-      system "/usr/bin/make", *args
+      make_path = "/usr/bin/make"
     else
       make = Formula["make"].opt_bin/"make"
       make_path = make.exist? ? make.to_s : (Formula["make"].opt_bin/"gmake").to_s
+    end
+
+    if superenv?
+      make_name = File.basename(make_path)
+      with_env "HOMEBREW_MAKE" => make_name do
+        system "make", *args
+      end
+    else
       system make_path, *args
     end
   end

@@ -1,4 +1,5 @@
-#:  * `pull` [`--bottle`] [`--bump`] [`--clean`] [`--ignore-whitespace`] [`--resolve`] [`--branch-okay`] [`--no-pbcopy`] [`--no-publish`] <patch-source> [<patch-source>]:
+#:  * `pull` [`--bottle`] [`--bump`] [`--clean`] [`--ignore-whitespace`] [`--resolve`] [`--branch-okay`] [`--no-pbcopy`] [`--no-publish`] [`--warn-on-publish-failure`] <patch-source> [<patch-source>]:
+#:
 #:    Gets a patch from a GitHub commit or pull request and applies it to Homebrew.
 #:    Optionally, installs the formulae changed by the patch.
 #:
@@ -13,7 +14,7 @@
 #:
 #:      ~ The URL of a commit on GitHub
 #:
-#:      ~ A "http://bot.brew.sh/job/..." string specifying a testing job ID
+#:      ~ A "https://jenkins.brew.sh/job/..." string specifying a testing job ID
 #:
 #:    If `--bottle` is passed, handle bottles, pulling the bottle-update
 #:    commit and publishing files on Bintray.
@@ -37,6 +38,9 @@
 #:    clipboard.
 #:
 #:    If `--no-publish` is passed, do not publish bottles to Bintray.
+#:
+#:    If `--warn-on-publish-failure` was passed, do not exit if there's a
+#:    failure publishing bottles on Bintray.
 
 require "net/http"
 require "net/https"
@@ -155,6 +159,13 @@ module Homebrew
           next
         end
 
+        if f.stable
+          stable_urls = [f.stable.url] + f.stable.mirrors
+          stable_urls.grep(%r{^https://dl.bintray.com/homebrew/mirror/}) do |mirror_url|
+            check_bintray_mirror(f.full_name, mirror_url)
+          end
+        end
+
         if ARGV.include? "--bottle"
           if f.bottle_unneeded?
             ohai "#{f}: skipping unneeded bottle."
@@ -217,7 +228,7 @@ module Homebrew
           "https://github.com/BrewTestBot/homebrew-#{tap.repo}/compare/homebrew:master...pr-#{issue}"
         end
 
-        curl "--silent", "--fail", "-o", "/dev/null", "-I", bottle_commit_url
+        curl "--silent", "--fail", "--output", "/dev/null", "--head", bottle_commit_url
 
         safe_system "git", "checkout", "--quiet", "-B", bottle_branch, orig_revision
         pull_patch bottle_commit_url, "bottle commit"
@@ -252,16 +263,16 @@ module Homebrew
     end
 
     published = []
-    bintray_creds = { user: ENV["BINTRAY_USER"], key: ENV["BINTRAY_KEY"] }
+    bintray_creds = { user: ENV["HOMEBREW_BINTRAY_USER"], key: ENV["HOMEBREW_BINTRAY_KEY"] }
     if bintray_creds[:user] && bintray_creds[:key]
       changed_formulae_names.each do |name|
         f = Formula[name]
         next if f.bottle_unneeded? || f.bottle_disabled?
-        publish_bottle_file_on_bintray(f, bintray_creds)
+        next unless publish_bottle_file_on_bintray(f, bintray_creds)
         published << f.full_name
       end
     else
-      opoo "You must set BINTRAY_USER and BINTRAY_KEY to add or update bottles on Bintray!"
+      opoo "You must set HOMEBREW_BINTRAY_USER and HOMEBREW_BINTRAY_KEY to add or update bottles on Bintray!"
     end
     published
   end
@@ -292,7 +303,7 @@ module Homebrew
       extra_msg = @description ? "(#{@description})" : nil
       ohai "Fetching patch #{extra_msg}"
       puts "Patch: #{patch_url}"
-      curl patch_url, "-s", "-o", patchpath
+      curl_download patch_url, to: patchpath
     end
 
     def apply_patch
@@ -336,7 +347,7 @@ module Homebrew
     formulae = []
     others = []
     File.foreach(patchfile) do |line|
-      files << $1 if line =~ %r{^\+\+\+ b/(.*)}
+      files << Regexp.last_match(1) if line =~ %r{^\+\+\+ b/(.*)}
     end
     files.each do |file|
       if tap && tap.formula_file?(file)
@@ -418,15 +429,20 @@ module Homebrew
     end
     unless info.bottle_info_any
       opoo "No bottle defined in formula #{package}"
-      return
+      return false
     end
     version = info.pkg_version
     ohai "Publishing on Bintray: #{package} #{version}"
-    curl "-w", '\n', "--silent", "--fail",
-         "-u#{creds[:user]}:#{creds[:key]}", "-X", "POST",
-         "-H", "Content-Type: application/json",
-         "-d", '{"publish_wait_for_secs": 0}',
+    curl "--write-out", '\n', "--silent", "--fail",
+         "--user", "#{creds[:user]}:#{creds[:key]}", "--request", "POST",
+         "--header", "Content-Type: application/json",
+         "--data", '{"publish_wait_for_secs": 0}',
          "https://api.bintray.com/content/homebrew/#{repo}/#{package}/#{version}/publish"
+    true
+  rescue => e
+    raise unless ARGV.include?("--warn-on-publish-failure")
+    onoe e
+    false
   end
 
   # Formula info drawn from an external "brew info --json" call
@@ -443,7 +459,7 @@ module Homebrew
     def self.lookup(name)
       json = Utils.popen_read(HOMEBREW_BREW_FILE, "info", "--json=v1", name)
 
-      return nil unless $?.success?
+      return nil unless $CHILD_STATUS.success?
 
       Homebrew.force_utf8!(json)
       FormulaInfoFromJson.new(JSON.parse(json)[0])
@@ -571,7 +587,7 @@ module Homebrew
         # We're in the cache; make sure to force re-download
         loop do
           begin
-            curl url, "-o", filename
+            curl_download url, continue_at: 0, to: filename
             break
           rescue
             if retry_count >= max_curl_retries
@@ -587,5 +603,13 @@ module Homebrew
         Pathname.new(filename).verify_checksum(checksum)
       end
     end
+  end
+
+  def check_bintray_mirror(name, url)
+    headers, = curl_output("--connect-timeout", "15", "--location", "--head", url)
+    status_code = headers.scan(%r{^HTTP\/.* (\d+)}).last.first
+    return if status_code.start_with?("2")
+    opoo "The Bintray mirror #{url} is not reachable (HTTP status code #{status_code})."
+    opoo "Do you need to upload it with `brew mirror #{name}`?"
   end
 end

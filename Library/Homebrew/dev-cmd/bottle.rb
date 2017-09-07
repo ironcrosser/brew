@@ -1,7 +1,29 @@
-#:  * `bottle` [`--verbose`] [`--no-rebuild`] [`--keep-old`] [`--skip-relocation`] [`--root-url=`<URL>] [`--force-core-tap`]:
-#:  * `bottle` `--merge` [`--no-commit`] [`--keep-old`] [`--write`]:
+#:  * `bottle` [`--verbose`] [`--no-rebuild`|`--keep-old`] [`--skip-relocation`] [`--root-url=`<URL>] [`--force-core-tap`] <formulae>:
 #:    Generate a bottle (binary package) from a formula installed with
 #:    `--build-bottle`.
+#:
+#:    If the formula specifies a rebuild version, it will be incremented in the
+#:    generated DSL. Passing `--keep-old` will attempt to keep it at its
+#:    original value, while `--no-rebuild` will remove it.
+#:
+#:    If `--verbose` (or `-v`) is passed, print the bottling commands and any warnings
+#:    encountered.
+#:
+#:    If `--skip-relocation` is passed, do not check if the bottle can be marked
+#:    as relocatable.
+#:
+#:    If `--root-url` is passed, use the specified <URL> as the root of the
+#:    bottle's URL instead of Homebrew's default.
+#:
+#:    If `--force-core-tap` is passed, build a bottle even if <formula> is not
+#:    in homebrew/core or any installed taps.
+#:
+#:  * `bottle` `--merge` [`--keep-old`] [`--write` [`--no-commit`]] <formulae>:
+#:    Generate a bottle from a formula and print the new DSL merged into the
+#:    existing formula.
+#:
+#:    If `--write` is passed, write the changes to the formula file. A new
+#:    commit will then be generated unless `--no-commit` is passed.
 
 require "formula"
 require "utils/bottles"
@@ -226,7 +248,7 @@ module Homebrew
           mv "#{relocatable_tar_path}.gz", bottle_path
         end
 
-        if bottle_path.size > 1*1024*1024
+        if bottle_path.size > 1 * 1024 * 1024
           ohai "Detecting if #{filename} is relocatable..."
         end
 
@@ -292,8 +314,8 @@ module Homebrew
 
     old_spec = f.bottle_specification
     if ARGV.include?("--keep-old") && !old_spec.checksums.empty?
-      mismatches = [:root_url, :prefix, :cellar, :rebuild].select do |key|
-        old_spec.send(key) != bottle.send(key)
+      mismatches = [:root_url, :prefix, :cellar, :rebuild].reject do |key|
+        old_spec.send(key) == bottle.send(key)
       end
       mismatches.delete(:cellar) if old_spec.cellar == :any && bottle.cellar == :any_skip_relocation
       unless mismatches.empty?
@@ -360,9 +382,7 @@ module Homebrew
       bottle = BottleSpecification.new
       bottle.root_url bottle_hash["bottle"]["root_url"]
       cellar = bottle_hash["bottle"]["cellar"]
-      if cellar == "any" || cellar == "any_skip_relocation"
-        cellar = cellar.to_sym
-      end
+      cellar = cellar.to_sym if ["any", "any_skip_relocation"].include?(cellar)
       bottle.cellar cellar
       bottle.prefix bottle_hash["bottle"]["prefix"]
       bottle.rebuild bottle_hash["bottle"]["rebuild"]
@@ -415,7 +435,6 @@ module Homebrew
                   --keep-old was passed but there are changes in:
                   #{mismatches.join("\n")}
                 EOS
-                odie "--keep-old was passed but there were changes in #{mismatches.join(", ")}!"
               end
               output = bottle_output bottle
             end

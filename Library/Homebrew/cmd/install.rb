@@ -1,10 +1,10 @@
-#:  * `install` [`--debug`] [`--env=`<std>|<super>] [`--ignore-dependencies`] [`--only-dependencies`] [`--cc=`<compiler>] [`--build-from-source`] [`--devel`|`--HEAD`] [`--keep-tmp`] <formula>:
+#:  * `install` [`--debug`] [`--env=`(`std`|`super`)] [`--ignore-dependencies`|`--only-dependencies`] [`--cc=`<compiler>] [`--build-from-source`|`--force-bottle`] [`--devel`|`--HEAD`] [`--keep-tmp`] [`--build-bottle`] <formula> [<options> ...]:
 #:    Install <formula>.
 #:
 #:    <formula> is usually the name of the formula to install, but it can be specified
-#:    in several different ways. See [SPECIFYING FORMULAE][].
+#:    in several different ways. See [SPECIFYING FORMULAE](#specifying-formulae).
 #:
-#:    If `--debug` is passed and brewing fails, open an interactive debugging
+#:    If `--debug` (or `-d`) is passed and brewing fails, open an interactive debugging
 #:    session with access to IRB or a shell inside the temporary build directory.
 #:
 #:    If `--env=std` is passed, use the standard build environment instead of superenv.
@@ -24,7 +24,7 @@
 #:    `gcc-4.2` for Apple's GCC 4.2, or `gcc-4.9` for a Homebrew-provided GCC
 #:    4.9.
 #:
-#:    If `--build-from-source` or `-s` is passed, compile the specified <formula> from
+#:    If `--build-from-source` (or `-s`) is passed, compile the specified <formula> from
 #:    source even if a bottle is provided. Dependencies will still be installed
 #:    from bottles if they are available.
 #:
@@ -44,15 +44,22 @@
 #:    If `--keep-tmp` is passed, the temporary files created during installation
 #:    are not deleted.
 #:
-#:  * `install` `--interactive` [`--git`] <formula>:
-#:    Download and patch <formula>, then open a shell. This allows the user to
-#:    run `./configure --help` and otherwise determine how to turn the software
-#:    package into a Homebrew formula.
+#:    If `--build-bottle` is passed, prepare the formula for eventual bottling
+#:    during installation.
 #:
-#:    If `--git` is passed, Homebrew will create a Git repository, useful for
+#:    Installation options specific to <formula> may be appended to the command,
+#:    and can be listed with `brew options` <formula>.
+#:
+#:  * `install` `--interactive` [`--git`] <formula>:
+#:    If `--interactive` (or `-i`) is passed, download and patch <formula>, then
+#:    open a shell. This allows the user to run `./configure --help` and
+#:    otherwise determine how to turn the software package into a Homebrew
+#:    formula.
+#:
+#:    If `--git` (or `-g`) is passed, Homebrew will create a Git repository, useful for
 #:    creating patches to the software.
 
-require "blacklist"
+require "missing_formula"
 require "diagnostic"
 require "cmd/search"
 require "formula_installer"
@@ -76,7 +83,7 @@ module Homebrew
         if name !~ HOMEBREW_TAP_FORMULA_REGEX && name !~ HOMEBREW_CASK_TAP_CASK_REGEX
           next
         end
-        tap = Tap.fetch($1, $2)
+        tap = Tap.fetch(Regexp.last_match(1), Regexp.last_match(2))
         tap.install unless tap.installed?
       end
     end
@@ -91,9 +98,8 @@ module Homebrew
         args << "--verbose" if ARGV.verbose?
 
         ARGV.casks.each do |c|
-          cmd = "brew", "cask", "install", c, *args
-          ohai cmd.join " "
-          system(*cmd)
+          ohai "brew cask install #{c} #{args.join " "}"
+          system("#{HOMEBREW_PREFIX}/bin/brew", "cask", "install", c, *args)
         end
       end
 
@@ -142,8 +148,17 @@ module Homebrew
           # linked to opt, because installing without any warnings can break
           # dependencies. Therefore before performing other checks we need to be
           # sure --force flag is passed.
-          opoo "#{f.full_name} is a keg-only and another version is linked to opt."
-          puts "Use `brew install --force` if you want to install this version"
+          if f.outdated?
+            optlinked_version = Keg.for(f.opt_prefix).version
+            onoe <<-EOS.undent
+              #{f.full_name} #{optlinked_version} is already installed
+              To upgrade to #{f.version}, run `brew upgrade #{f.name}`
+            EOS
+          else
+            opoo <<-EOS.undent
+              #{f.full_name} #{f.pkg_version} is already installed
+            EOS
+          end
         elsif (ARGV.build_head? && new_head_installed) || prefix_installed
           # After we're sure that --force flag is passed for linked to opt
           # keg-only we need to be sure that the version we're attempting to
@@ -155,30 +170,38 @@ module Homebrew
             f.pkg_version
           end
 
-          msg = "#{f.full_name}-#{installed_version} already installed"
+          msg = "#{f.full_name} #{installed_version} is already installed"
           linked_not_equals_installed = f.linked_version != installed_version
           if f.linked? && linked_not_equals_installed
-            msg << ", however linked version is #{f.linked_version}"
-            opoo msg
-            puts "You can use `brew switch #{f} #{installed_version}` to link this version."
+            msg = <<-EOS.undent
+              #{msg}
+              The currently linked version is #{f.linked_version}
+              You can use `brew switch #{f} #{installed_version}` to link this version.
+            EOS
           elsif !f.linked? || f.keg_only?
-            msg << ", it's just not linked."
-            opoo msg
-          else
-            opoo msg
+            msg = <<-EOS.undent
+              #{msg}, it's just not linked.
+              You can use `brew link #{f}` to link this version.
+            EOS
           end
+          opoo msg
         elsif !f.any_version_installed? && old_formula = f.old_installed_formulae.first
-          msg = "#{old_formula.full_name}-#{old_formula.installed_version} already installed"
+          msg = "#{old_formula.full_name} #{old_formula.installed_version} already installed"
           if !old_formula.linked? && !old_formula.keg_only?
-            msg << ", it's just not linked."
+            msg = <<-EOS.undent
+              #{msg}, it's just not linked.
+              You can use `brew link #{old_formula.full_name}` to link this version.
+            EOS
           end
           opoo msg
         elsif f.migration_needed? && !ARGV.force?
           # Check if the formula we try to install is the same as installed
           # but not migrated one. If --force passed then install anyway.
-          opoo "#{f.oldname} already installed, it's just not migrated"
-          puts "You can migrate formula with `brew migrate #{f}`"
-          puts "Or you can force install it with `brew install #{f} --force`"
+          opoo <<-EOS.undent
+            #{f.oldname} already installed, it's just not migrated
+            You can migrate formula with `brew migrate #{f}`
+            Or you can force install it with `brew install #{f} --force`
+          EOS
         else
           # If none of the above is true and the formula is linked, then
           # FormulaInstaller will handle this case.
@@ -190,56 +213,68 @@ module Homebrew
         next unless f.opt_prefix.directory?
         keg = Keg.new(f.opt_prefix.resolved_path)
         tab = Tab.for_keg(keg)
-        tab.installed_on_request = true
-        tab.write
+        unless tab.installed_on_request
+          tab.installed_on_request = true
+          tab.write
+        end
       end
 
       perform_preinstall_checks
 
-      formulae.each { |f| install_formula(f) }
-    rescue FormulaClassUnavailableError => e
+      formulae.each do |f|
+        Migrator.migrate_if_needed(f)
+        install_formula(f)
+      end
+    rescue FormulaUnreadableError, FormulaClassUnavailableError,
+           TapFormulaUnreadableError, TapFormulaClassUnavailableError => e
       # Need to rescue before `FormulaUnavailableError` (superclass of this)
       # is handled, as searching for a formula doesn't make sense here (the
       # formula was found, but there's a problem with its implementation).
       ofail e.message
     rescue FormulaUnavailableError => e
-      if (blacklist = blacklisted?(e.name))
-        ofail "#{e.message}\n#{blacklist}"
-      elsif e.name == "updog"
+      if e.name == "updog"
         ofail "What's updog?"
+        return
+      end
+
+      ofail e.message
+      if (reason = Homebrew::MissingFormula.reason(e.name))
+        $stderr.puts reason
+        return
+      end
+
+      query = query_regexp(e.name)
+
+      ohai "Searching for similarly named formulae..."
+      formulae_search_results = search_formulae(query)
+      case formulae_search_results.length
+      when 0
+        ofail "No similarly named formulae found."
+      when 1
+        puts "This similarly named formula was found:"
+        puts formulae_search_results
+        puts "To install it, run:\n  brew install #{formulae_search_results.first}"
       else
-        ofail e.message
-        query = query_regexp(e.name)
+        puts "These similarly named formulae were found:"
+        puts Formatter.columns(formulae_search_results)
+        puts "To install one of them, run (for example):\n  brew install #{formulae_search_results.first}"
+      end
 
-        ohai "Searching for similarly named formulae..."
-        formulae_search_results = search_formulae(query)
-        case formulae_search_results.length
-        when 0
-          ofail "No similarly named formulae found."
-        when 1
-          puts "This similarly named formula was found:"
-          puts formulae_search_results
-          puts "To install it, run:\n  brew install #{formulae_search_results.first}"
-        else
-          puts "These similarly named formulae were found:"
-          puts Formatter.columns(formulae_search_results)
-          puts "To install one of them, run (for example):\n  brew install #{formulae_search_results.first}"
-        end
-
-        ohai "Searching taps..."
-        taps_search_results = search_taps(query)
-        case taps_search_results.length
-        when 0
-          ofail "No formulae found in taps."
-        when 1
-          puts "This formula was found in a tap:"
-          puts taps_search_results
-          puts "To install it, run:\n  brew install #{taps_search_results.first}"
-        else
-          puts "These formulae were found in taps:"
-          puts Formatter.columns(taps_search_results)
-          puts "To install one of them, run (for example):\n  brew install #{taps_search_results.first}"
-        end
+      # Do not search taps if the formula name is qualified
+      return if e.name.include?("/")
+      ohai "Searching taps..."
+      taps_search_results = search_taps(query)
+      case taps_search_results.length
+      when 0
+        ofail "No formulae found in taps."
+      when 1
+        puts "This formula was found in a tap:"
+        puts taps_search_results
+        puts "To install it, run:\n  brew install #{taps_search_results.first}"
+      else
+        puts "These formulae were found in taps:"
+        puts Formatter.columns(taps_search_results)
+        puts "To install one of them, run (for example):\n  brew install #{taps_search_results.first}"
       end
     end
   end
@@ -295,13 +330,8 @@ module Homebrew
     fi.ignore_deps          = ARGV.ignore_deps?
     fi.only_deps            = ARGV.only_deps?
     fi.build_bottle         = ARGV.build_bottle?
-    fi.build_from_source    = ARGV.build_from_source? || ARGV.build_all_from_source?
-    fi.force_bottle         = ARGV.force_bottle?
     fi.interactive          = ARGV.interactive?
     fi.git                  = ARGV.git?
-    fi.verbose              = ARGV.verbose?
-    fi.quieter              = ARGV.quieter?
-    fi.debug                = ARGV.debug?
     fi.prelude
     fi.install
     fi.finish

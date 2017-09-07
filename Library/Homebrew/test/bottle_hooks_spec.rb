@@ -1,9 +1,9 @@
 require "formula_installer"
 require "hooks/bottles"
 
-RSpec::Matchers.alias_matcher :pour_bottle, :be_pour_bottle
-
 describe Homebrew::Hooks::Bottles do
+  alias_matcher :pour_bottle, :be_pour_bottle
+
   subject { FormulaInstaller.new formula }
 
   let(:formula) do
@@ -12,6 +12,7 @@ describe Homebrew::Hooks::Bottles do
       local_bottle_path: nil,
       bottle_disabled?: false,
       some_random_method: true,
+      keg_only?: false,
     )
   end
 

@@ -61,7 +61,7 @@ class Requirement
 
     if parent = satisfied_result_parent
       parent.to_s =~ %r{(#{Regexp.escape(HOMEBREW_CELLAR)}|#{Regexp.escape(HOMEBREW_PREFIX)}/opt)/([\w+-.@]+)}
-      @formula = $2
+      @formula = Regexp.last_match(2)
     end
 
     true
@@ -96,7 +96,7 @@ class Requirement
     # PATH.
     parent = satisfied_result_parent
     return unless parent
-    return if ENV["PATH"].split(File::PATH_SEPARATOR).include?(parent.to_s)
+    return if PATH.new(ENV["PATH"]).include?(parent.to_s)
     ENV.append_path("PATH", parent)
   end
 
@@ -125,8 +125,14 @@ class Requirement
     @formula || self.class.default_formula
   end
 
-  def to_dependency
-    if formula =~ HOMEBREW_TAP_FORMULA_REGEX
+  def satisfied_by_formula?
+    !@formula.nil?
+  end
+
+  def to_dependency(use_default_formula: false)
+    if use_default_formula && default_formula?
+      Dependency.new(self.class.default_formula, tags, method(:modify_build_environment), name)
+    elsif formula =~ HOMEBREW_TAP_FORMULA_REGEX
       TapDependency.new(formula, tags, method(:modify_build_environment), name)
     elsif formula
       Dependency.new(formula, tags, method(:modify_build_environment), name)
@@ -147,21 +153,19 @@ class Requirement
   end
 
   def which(cmd)
-    super(cmd, ORIGINAL_PATHS.join(File::PATH_SEPARATOR))
+    super(cmd, PATH.new(ORIGINAL_PATHS))
   end
 
   def which_all(cmd)
-    super(cmd, ORIGINAL_PATHS.join(File::PATH_SEPARATOR))
+    super(cmd, PATH.new(ORIGINAL_PATHS))
   end
 
   class << self
-    include BuildEnvironmentDSL
+    include BuildEnvironment::DSL
 
-    attr_reader :env_proc
+    attr_reader :env_proc, :build
     attr_rw :fatal, :default_formula
     attr_rw :cask, :download
-    # build is deprecated, use `depends_on <requirement> => :build` instead
-    attr_rw :build
 
     def satisfy(options = {}, &block)
       @satisfied ||= Requirement::Satisfier.new(options, &block)

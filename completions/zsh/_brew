@@ -205,14 +205,6 @@ _brew_audit() {
     '*:formula:__brew_formulae'
 }
 
-# brew boneyard-formula-pr [--dry-run] [--local]  formula-name
-_brew_boneyard_formula_pr() {
-  _arguments \
-    '--dry-run[print what would be done rather than doing it]' \
-    '--local[perform only local operations(i.e. don''t push or create PR)]' \
-    ':formula:__brew_formulae'
-}
-
 # brew bottle [--verbose] [--no-rebuild] [--keep-old] [--skip-relocation] [--root-url=root_url]
 # brew bottle --merge [--no-commit] [--keep-old] [--write]
 # TODO missing argument docs
@@ -292,8 +284,8 @@ _brew_create() {
     ':url:_urls'
 }
 
-# brew deps [--1] [-n] [--union] [--full-name] [--installed] [--include-build] [--include-optional] [--skip-recommended] formulae
-# brew deps --tree [filters] (formulae|--installed)
+# brew deps [--1] [-n] [--union] [--full-name] [--installed] [--include-build] [--include-optional] [--skip-recommended] [--include-requirements] formulae
+# brew deps --tree [--1] [filters] (formulae|--installed)
 # brew deps [filters] (--installed|--all)
 # The filters placeholder is any combination of options --include-build, --include-optional, and --skip-recommended as documented above.
 _brew_deps() {
@@ -302,6 +294,7 @@ _brew_deps() {
       '--include-build[include \:build dependencies]' \
       '--include-optional[include \:optional dependencies]' \
       '--skip-recommended[skip \:recommended type dependencies]' \
+      '--include-requirements[include requirements]' \
       '--1[only show dependencies one level down, instead of recursing]' \
       '-n[show dependencies in topological order]' \
       '--union[show the union of dependencies for formulae, instead of the intersection]' \
@@ -311,6 +304,11 @@ _brew_deps() {
     - tree-deps \
       '--tree[show dependencies as a tree]' \
       '(*)--installed[show dependencies for all installed formulae]' \
+      '--include-build[include \:build dependencies]' \
+      '--include-optional[include \:optional dependencies]' \
+      '--skip-recommended[skip \:recommended type dependencies]' \
+      '--include-requirements[include requirements]' \
+      '--1[only show dependencies one level down, instead of recursing]' \
       '(--installed)*:formulae:__brew_formulae' \
     - installed-all \
       '--include-build[include \:build dependencies]' \
@@ -594,8 +592,14 @@ _brew_style() {
 
 # brew switch name version:
 _brew_switch() {
-  _message "name version"
-  return 1
+  local -a versions
+  if [[ -n ${words[2]} ]]; then
+    versions=(${$(brew ls "${words[2]}" --versions)#${words[2]}})
+  fi
+  _arguments -S \
+    '1::formula:__brew_formulae' \
+    "2:: :(${versions[*]})" \
+    && ret=0
 }
 
 # brew tap:
@@ -684,8 +688,7 @@ _brew_test_bot() {
 }
 
 # brew tests [-v] [--coverage] [--generic] [--no-compat]
-#   [--only=test_script:test_method] [--seed seed] [--trace] [--online]
-#   [--official-cmd-taps]:
+#   [--only=test_script:test_method] [--seed seed] [--trace] [--online]:
 _brew_tests() {
   _arguments \
   '(-v)-v' \
@@ -695,8 +698,7 @@ _brew_tests() {
   '(--only)--only=-:test_method: ' \
   '(--seed)--seed:seed: ' \
   '(--trace)--trace' \
-  '(--online)--online' \
-  '(--official-cmd-taps)--official-cmd-taps'
+  '(--online)--online'
 }
 
 # brew uninstall, rm, remove [--force] formula:

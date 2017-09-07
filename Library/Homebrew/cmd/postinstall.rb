@@ -7,7 +7,10 @@ module Homebrew
   module_function
 
   def postinstall
-    ARGV.resolved_formulae.each { |f| run_post_install(f) if f.post_install_defined? }
+    ARGV.resolved_formulae.each do |f|
+      ohai "Postinstalling #{f}"
+      run_post_install(f)
+    end
   end
 
   def run_post_install(formula)
@@ -25,8 +28,6 @@ module Homebrew
     elsif formula.devel?
       args << "--devel"
     end
-
-    Sandbox.print_sandbox_message if Sandbox.formula?(formula)
 
     Utils.safe_fork do
       if Sandbox.formula?(formula)

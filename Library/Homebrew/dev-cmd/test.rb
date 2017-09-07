@@ -7,7 +7,7 @@
 #:    To test the development or head version of a formula, use `--devel` or
 #:    `--HEAD`.
 #:
-#:    If `--debug` is passed and the test fails, an interactive debugger will be
+#:    If `--debug` (or `-d`) is passed and the test fails, an interactive debugger will be
 #:    launched with access to IRB or a shell inside the temporary test directory.
 #:
 #:    If `--keep-tmp` is passed, the temporary files created for the test are
@@ -39,6 +39,12 @@ module Homebrew
         next
       end
 
+      # Don't test unlinked formulae
+      if !ARGV.force? && !f.keg_only? && !f.linked?
+        ofail "#{f.full_name} is not linked"
+        next
+      end
+
       puts "Testing #{f.full_name}"
 
       env = ENV.to_hash
@@ -59,8 +65,6 @@ module Homebrew
           args << "--devel"
         end
 
-        Sandbox.print_sandbox_message if Sandbox.test?
-
         Utils.safe_fork do
           if Sandbox.test?
             sandbox = Sandbox.new
@@ -77,7 +81,7 @@ module Homebrew
             exec(*args)
           end
         end
-      rescue Assertions::FailedAssertion => e
+      rescue ::Test::Unit::AssertionFailedError => e
         ofail "#{f.full_name}: failed"
         puts e.message
       rescue Exception => e
